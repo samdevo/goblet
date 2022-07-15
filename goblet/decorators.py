@@ -115,6 +115,16 @@ class DecoratorAPI:
             registration_kwargs={"headers": headers},
         )
 
+    def job(self, task_num, schedule):
+        """Cloudrun job trigger"""
+        return self._create_registration_function(
+            handler_type="job",
+            registration_kwargs={
+                "taskNum": task_num,
+                "schedule": schedule
+            }
+        )
+
     def _create_registration_function(self, handler_type, registration_kwargs=None):
         def _register_handler(user_handler):
             handler_name = user_handler.__name__

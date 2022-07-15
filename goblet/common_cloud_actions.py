@@ -16,12 +16,17 @@ log = logging.getLogger("goblet.deployer")
 log.setLevel(logging.INFO)
 
 
-def create_cloudfunction(client, req_body, config=None):
+def create_cloudfunction(client, req_body, config=None, v2=False):
     """Creates a cloudfunction based on req_body"""
     function_name = req_body["name"].split("/")[-1]
+    params = {"body": req_body}
+    if v2:
+        params["functionId"] = function_name
     try:
         resp = client.execute(
-            "create", parent_key="location", params={"body": req_body}
+            "create",
+            parent_key="location" if client.version == "v1" else "parent",
+            params=params
         )
         log.info(f"creating cloudfunction {function_name}")
     except HttpError as e:
@@ -35,7 +40,7 @@ def create_cloudfunction(client, req_body, config=None):
             )
         else:
             raise e
-    client.wait_for_operation(resp["name"], calls="operations")
+    client.wait_for_operation(resp["name"], calls="projects.locations.operations" if v2 else "operations")
 
     # Set IAM Bindings
     config = GConfig(config=config)
@@ -56,7 +61,7 @@ def destroy_cloudfunction(client, name):
         client.execute(
             "delete",
             parent_schema="projects/{project_id}/locations/{location_id}/functions/"
-            + name,
+                          + name,
             parent_key="name",
         )
         log.info(f"deleting google cloudfunction {name}......")
@@ -73,7 +78,7 @@ def destroy_cloudrun(client, name):
         client.execute(
             "delete",
             parent_schema="projects/{project_id}/locations/{location_id}/services/"
-            + name,
+                          + name,
             parent_key="name",
         )
         log.info(f"deleting cloudrun {name}......")
@@ -118,7 +123,7 @@ def get_cloudrun_url(client, name):
             "get",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/{location_id}/services/"
-            + name,
+                          + name,
         )
         return resp["status"]["url"]
     except HttpError as e:
@@ -135,7 +140,7 @@ def get_cloudfunction_url(client, name):
             "get",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/{location_id}/functions/"
-            + name,
+                          + name,
         )
         target = resp["httpsTrigger"]["url"]
 
@@ -216,9 +221,9 @@ def create_eventarc_trigger(client, trigger_name, region, req_body):
                 "patch",
                 parent_key="name",
                 parent_schema="projects/{project_id}/locations/"
-                + region
-                + "/triggers/"
-                + trigger_name,
+                              + region
+                              + "/triggers/"
+                              + trigger_name,
                 params={"body": req_body, "updateMask": updateMask},
             )
         else:
@@ -232,9 +237,9 @@ def destroy_eventarc_trigger(client, trigger_name, region):
             "delete",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/"
-            + region
-            + "/triggers/"
-            + trigger_name,
+                          + region
+                          + "/triggers/"
+                          + trigger_name,
         )
         log.info(f"deleting eventarc trigger  {trigger_name}......")
     except HttpError as e:

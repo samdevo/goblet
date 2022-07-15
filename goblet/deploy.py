@@ -1,3 +1,5 @@
+import gzip
+import shutil
 from pathlib import Path
 import zipfile
 import os
@@ -9,6 +11,7 @@ from requests import request
 import base64
 import warnings
 import subprocess
+import tarfile
 
 from googleapiclient.errors import HttpError
 
@@ -47,7 +50,7 @@ class Deployer:
         self.zip()
 
     def deploy(
-        self, goblet, skip_function=False, only_function=False, config={}, force=False
+            self, goblet, skip_function=False, only_function=False, config={}, force=False
     ):
         """Deploys http cloudfunction and then calls goblet.deploy() to deploy any handler's required infrastructure"""
         source_url = None
@@ -57,20 +60,20 @@ class Deployer:
                 log.info("zipping function......")
                 self.zip()
                 if (
-                    not force
-                    and self.get_function(versioned_clients.cloudfunctions)
-                    and not self._cloudfunction_delta(
-                        versioned_clients.cloudfunctions, f".goblet/{self.name}.zip"
-                    )
+                        not force
+                        and self.get_function(versioned_clients.cloudfunctions)
+                        and not self._cloudfunction_delta(
+                    versioned_clients.cloudfunctions, f".goblet/{self.name}.tar.gz"
+                )
                 ):
                     log.info("No changes detected......")
                 else:
                     log.info("uploading function zip to gs......")
-                    source_url = self._upload_zip(versioned_clients.cloudfunctions)
+                    source = self._upload_zip(versioned_clients.cloudfunctions)
                     if goblet.is_http():
                         self.create_function(
                             versioned_clients.cloudfunctions,
-                            source_url,
+                            source,
                             "goblet_entrypoint",
                             config,
                         )
@@ -109,27 +112,45 @@ class Deployer:
             if e.resp.status != 404:
                 raise
 
-    def create_function(self, client, url, entrypoint, config={}):
+    def create_function(self, client, source, entrypoint, config={}):
         """Creates http cloudfunction"""
         config = GConfig(config=config)
         user_configs = config.cloudfunction or {}
-        req_body = {
-            "name": self.func_name,
-            "description": config.description or "created by goblet",
-            "entryPoint": entrypoint,
-            "sourceUploadUrl": url,
-            "httpsTrigger": {},
-            "runtime": "python37",
-            **user_configs,
-        }
-        create_cloudfunction(client, req_body, config=config.config)
+        query_params = {}
+        if client.version == "v1":
+            req_body = {
+                "name": self.func_name,
+                "description": config.description or "created by goblet",
+                "entryPoint": entrypoint,
+                "sourceUploadUrl": source["uploadUrl"],
+                "httpsTrigger": {},
+                "runtime": "python37",
+                **user_configs,
+            }
+        elif client.version in ("v2alpha", "v2beta"):
+            req_body = {
+                "name": self.func_name,
+                "environment": "GEN_2",
+                "description": config.description or "created by goblet",
+                "buildConfig": {
+                    "runtime": "python38",
+                    "entryPoint": entrypoint,
+                    "source": {
+                        "storageSource": source["storageSource"]
+                    }
+                },
+                **user_configs,
+            }
+        else:
+            raise
+        create_cloudfunction(client, req_body, config=config.config, v2=client.version in ("v2alpha", "v2beta"))
 
     def create_cloudrun(self, client, config={}):
         """Creates http cloudfunction"""
         config = GConfig(config=config)
         cloudrun_configs = config.cloudrun or {}
         if not cloudrun_configs.get("no-allow-unauthenticated") or cloudrun_configs.get(
-            "allow-unauthenticated"
+                "allow-unauthenticated"
         ):
             cloudrun_configs["no-allow-unauthenticated"] = None
         cloudrun_options = []
@@ -165,7 +186,7 @@ class Deployer:
         base_command.extend(cloudrun_options)
         try:
             if not os.path.exists(get_dir() + "/Dockerfile") and not os.path.exists(
-                get_dir() + "/Procfile"
+                    get_dir() + "/Procfile"
             ):
                 log.info(
                     "No Dockerfile or Procfile found for cloudrun backend. Writing default Dockerfile"
@@ -209,30 +230,32 @@ class Deployer:
     def _upload_zip(self, client):
         """Uploads zipped cloudfunction using generateUploadUrl endpoint"""
         self.zipf.close()
-        zip_size = os.stat(f".goblet/{self.name}.zip").st_size
-        with open(f".goblet/{self.name}.zip", "rb") as f:
+        zip_size = os.stat(f".goblet/{self.name}.tar.gz").st_size
+        with open(f".goblet/{self.name}.tar.gz", "rb") as f:
             resp = client.execute("generateUploadUrl", params={"body": {}})
+            put_headers = {
+                "content-type": "application/zip",
+                # "Content-Length": str(zip_size),
+            }
+            if client.version == "v1":
+                put_headers["x-goog-content-length-range"] = "0,104857600"
 
             requests.put(
                 resp["uploadUrl"],
                 data=f,
-                headers={
-                    "content-type": "application/zip",
-                    "Content-Length": str(zip_size),
-                    "x-goog-content-length-range": "0,104857600",
-                },
-            )
+                headers=put_headers,
+            ).raise_for_status()
 
         log.info("function code uploaded")
 
-        return resp["uploadUrl"]
+        return resp
 
     def create_zip(self):
         """Creates initial goblet zipfile"""
         if not os.path.isdir(get_g_dir()):
             os.mkdir(get_g_dir())
-        return zipfile.ZipFile(
-            get_g_dir() + f"/{self.name}.zip", "w", zipfile.ZIP_DEFLATED
+        return tarfile.open(
+            get_g_dir() + f"/{self.name}.tar.gz", "w:gz"
         )
 
     def zip(self):
@@ -248,13 +271,13 @@ class Deployer:
             self.zip_directory(get_dir() + "/*", include=include)
 
     def zip_file(self, filename, arcname=None):
-        self.zipf.write(filename, arcname)
+        self.zipf.add(filename, arcname)
 
     def zip_directory(
-        self,
-        dir,
-        include=["*.py"],
-        exclude=["build", "docs", "examples", "test", "tests", "venv"],
+            self,
+            dir,
+            include=["*.py"],
+            exclude=["build", "docs", "examples", "test", "tests", "venv"],
     ):
         exclusion_set = set(exclude)
         globbed_files = []
@@ -262,4 +285,4 @@ class Deployer:
             globbed_files.extend(Path("").rglob(pattern))
         for path in globbed_files:
             if not set(path.parts).intersection(exclusion_set):
-                self.zipf.write(str(path))
+                self.zipf.add(str(path))

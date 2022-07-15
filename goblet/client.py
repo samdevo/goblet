@@ -143,12 +143,14 @@ class Client:
         parent_key="parent",
         params=None,
     ):
+        # print(params)
         """Executes the GCP client api call. parent_schema is the name or parent param required for most api calls. project
         and location is automatically added if the schema contains {project_id} or {location_id}. The parent_key is used if
         the api call uses a different key than parent"""
         api_chain = self.client
         _params = params or {}
         _calls = calls or self.calls
+
         if parent_schema:
             parent_schema = parent_schema.format(
                 project_id=self.project_id, location_id=self.location_id
@@ -162,6 +164,10 @@ class Client:
 
         if _schema and parent:
             _params[parent_key] = _schema
+        # print(api_chain)
+        # print(api)
+        # print(_schema)
+        # print(_params)
         return getattr(api_chain, api)(**_params).execute()
 
 
