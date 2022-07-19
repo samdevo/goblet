@@ -62,7 +62,7 @@ def destroy_cloudfunction(client, name):
         client.execute(
             "delete",
             parent_schema="projects/{project_id}/locations/{location_id}/functions/"
-            + name,
+                          + name,
             parent_key="name",
         )
         log.info(f"deleting google cloudfunction {name}......")
@@ -79,7 +79,7 @@ def destroy_cloudrun(client, name):
         client.execute(
             "delete",
             parent_schema="projects/{project_id}/locations/{location_id}/services/"
-            + name,
+                          + name,
             parent_key="name",
         )
         log.info(f"deleting cloudrun {name}......")
@@ -124,7 +124,7 @@ def get_cloudrun_url(client, name):
             "get",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/{location_id}/services/"
-            + name,
+                          + name,
         )
         return resp["status"]["url"]
     except HttpError as e:
@@ -141,7 +141,7 @@ def get_cloudfunction_url(client, name):
             "get",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/{location_id}/functions/"
-            + name,
+                          + name,
         )
         target = resp["httpsTrigger"]["url"]
 
@@ -222,9 +222,9 @@ def create_eventarc_trigger(client, trigger_name, region, req_body):
                 "patch",
                 parent_key="name",
                 parent_schema="projects/{project_id}/locations/"
-                + region
-                + "/triggers/"
-                + trigger_name,
+                              + region
+                              + "/triggers/"
+                              + trigger_name,
                 params={"body": req_body, "updateMask": updateMask},
             )
         else:
@@ -238,9 +238,9 @@ def destroy_eventarc_trigger(client, trigger_name, region):
             "delete",
             parent_key="name",
             parent_schema="projects/{project_id}/locations/"
-            + region
-            + "/triggers/"
-            + trigger_name,
+                          + region
+                          + "/triggers/"
+                          + trigger_name,
         )
         log.info(f"deleting eventarc trigger  {trigger_name}......")
     except HttpError as e:
