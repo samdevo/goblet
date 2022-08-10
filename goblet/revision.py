@@ -111,19 +111,33 @@ class RevisionSpec:
             maxTraffic["percent"] -= sub_from_max
             trafficList[maxTrafficLoc] = maxTraffic
 
-        self.req_body["traffic"] = trafficList
+        if self.versioned_clients.run.version == "v2":
+            self.req_body["traffic"] = trafficList
+        else:
+            self.req_body["spec"]["traffic"] = trafficList
 
     def deployRevision(self):
         client = self.versioned_clients.run
         region = get_default_location()
-        project = get_default_project()
         self.getArtifact()
-        self.req_body = {
-            "template": {
-                "containers": [{"image": self.latestArtifact}],
-                **self.cloudrun_revision,
+        if self.versioned_clients.run.version == "v2":
+            self.req_body = {
+                "template": {
+                    "containers": [{"image": self.latestArtifact}],
+                    **self.cloudrun_revision,
+                }
             }
-        }
+        else:
+            self.req_body = {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"image": self.latestArtifact}],
+                            **self.cloudrun_revision,
+                        }
+                    }
+                }
+            }
 
         # check for traffic config
         if self.cloudrun_configs.get("traffic"):
@@ -131,7 +145,7 @@ class RevisionSpec:
             resp = client.execute(
                 "list",
                 parent_key="parent",
-                parent_schema=f"projects/{project}/locations/{region}",
+                parent_schema=f"projects/{get_default_project_number()}/locations/{region}",
                 params={},
             )
 

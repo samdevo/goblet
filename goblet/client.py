@@ -202,15 +202,20 @@ class VersionedClients:
     @property
     def run(self):
         version = self.client_versions.get("run", "v2")
-        calls = (
-            "projects.locations.services" if version == "v2" else "namespaces.services"
-        )
-        return Client(
-            "run",
-            version,
-            calls=calls,
-            parent_schema="projects/{project_id}/locations/{location_id}",
-        )
+        if version == "v2":
+            return Client(
+                "run",
+                version,
+                calls="projects.locations.services",
+                parent_schema="projects/{project_id}/locations/{location_id}",
+            )
+        else:
+            return Client(
+                "run",
+                version,
+                calls="namespaces.services",
+                parent_schema="namespaces/{project_id}",
+            )
 
     @property
     def pubsub(self):

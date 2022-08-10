@@ -1,7 +1,7 @@
 import os
 
 from goblet.backends.backend import Backend
-from goblet.client import VersionedClients, get_default_project, get_default_location
+from goblet.client import VersionedClients, get_default_project, get_default_location, get_default_project_number
 from goblet.common_cloud_actions import (
     create_cloudbuild,
     destroy_cloudrun,
@@ -19,7 +19,10 @@ class CloudRun(Backend):
 
     def __init__(self, app, config={}):
         self.client = VersionedClients(app.client_versions).run
-        self.run_name = f"projects/{get_default_project()}/locations/{get_default_location()}/services/{app.function_name}"
+        if app.client_versions["run"] == "v2":
+            self.run_name = f"projects/{get_default_project()}/locations/{get_default_location()}/services/{app.function_name}"
+        else:
+            self.run_name = f"namespaces/{get_default_project()}/services/{app.function_name}"
         super().__init__(app, self.client, self.run_name, config=config)
 
     def deploy(self, force=False, config=None):
@@ -49,6 +52,7 @@ class CloudRun(Backend):
         self.create_build(versioned_clients.cloudbuild, source, self.name, config)
         serviceRevision = RevisionSpec(config, versioned_clients, self.name)
         serviceRevision.deployRevision()
+
 
         # Set IAM Bindings
         if self.config.bindings:

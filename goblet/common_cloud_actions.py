@@ -156,6 +156,10 @@ def create_cloudbuild(client, req_body):
 
 def deploy_cloudrun(client, req_body, name):
     """Deploys cloud build to cloudrun"""
+    if client.version == "v2":
+        schema = "projects/" + str(get_default_project_number()) + "/locations/{location_id}"
+    else:
+        schema = "namespaces/{project_id}"
     try:
         params = {"body": req_body}
         if client.version == "v2":
@@ -163,9 +167,7 @@ def deploy_cloudrun(client, req_body, name):
         resp = client.execute(
             "create",
             parent_key="parent",
-            parent_schema="projects/"
-            + get_default_project_number()
-            + "/locations/{location_id}",
+            parent_schema=schema,
             params=params,
         )
         log.info("creating cloudrun")
@@ -185,9 +187,7 @@ def deploy_cloudrun(client, req_body, name):
             raise e
         # oerations not supported by v1
         if client.version == "v2":
-            client.wait_for_operation(
-                resp["name"], calls="projects.locations.operations"
-            )
+            client.wait_for_operation(resp["name"], calls="projects.locations.operations")
 
 
 def get_cloudrun_url(client, name):
