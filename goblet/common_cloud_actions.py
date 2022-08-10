@@ -12,18 +12,39 @@ from goblet.client import (
     get_credentials,
     get_default_project_number,
 )
+from goblet.utils import get_python_runtime
 
 log = logging.getLogger("goblet.deployer")
 log.setLevel(logging.INFO)
 
 
-def create_cloudfunction(client, req_body, config=None):
+def create_cloudfunctionv1(client: Client, params: dict, config=None):
+    create_cloudfunction(
+        client, params, config, parent_key="location", operations_calls="operations"
+    )
+
+
+def create_cloudfunctionv2(client: Client, params: dict, config=None):
+    create_cloudfunction(
+        client,
+        params,
+        config,
+        parent_key="parent",
+        operations_calls="projects.locations.operations",
+    )
+
+
+def create_cloudfunction(
+    client: Client,
+    params: dict,
+    config=None,
+    parent_key="location",
+    operations_calls="operations",
+):
     """Creates a cloudfunction based on req_body"""
-    function_name = req_body["name"].split("/")[-1]
+    function_name = params["body"]["name"].split("/")[-1]
     try:
-        resp = client.execute(
-            "create", parent_key="location", params={"body": req_body}
-        )
+        resp = client.execute("create", parent_key=parent_key, params=params)
         log.info(f"creating cloudfunction {function_name}")
     except HttpError as e:
         if e.resp.status == 409:
@@ -31,22 +52,23 @@ def create_cloudfunction(client, req_body, config=None):
             resp = client.execute(
                 "patch",
                 parent_key="name",
-                parent_schema=req_body["name"],
-                params={"body": req_body},
+                parent_schema=params["body"]["name"],
+                params={"body": params["body"]},
             )
         else:
             raise e
-    client.wait_for_operation(resp["name"], calls="operations")
+
+    client.wait_for_operation(resp["name"], calls=operations_calls)
 
     # Set IAM Bindings
-    config = GConfig(config=config)
+    config = config or GConfig(config=config)
     if config.bindings:
         log.info(f"adding IAM bindings for cloudfunction {function_name}")
         policy_bindings = {"policy": {"bindings": config.bindings}}
         resp = client.execute(
             "setIamPolicy",
             parent_key="resource",
-            parent_schema=req_body["name"],
+            parent_schema=params["body"]["name"],
             params={"body": policy_bindings},
         )
 
@@ -134,14 +156,19 @@ def create_cloudbuild(client, req_body):
 
 def deploy_cloudrun(client, req_body, name):
     """Deploys cloud build to cloudrun"""
+    if client.version == "v2":
+        schema = "projects/" + str(get_default_project_number()) + "/locations/{location_id}"
+    else:
+        schema = "namespaces/{project_id}"
     try:
+        params = {"body": req_body}
+        if client.version == "v2":
+            params["serviceId"] = name
         resp = client.execute(
             "create",
             parent_key="parent",
-            parent_schema="projects/"
-            + get_default_project_number()
-            + "/locations/{location_id}",
-            params={"body": req_body, "serviceId": name},
+            parent_schema=schema,
+            params=params,
         )
         log.info("creating cloudrun")
     except HttpError as e:
@@ -158,7 +185,9 @@ def deploy_cloudrun(client, req_body, name):
             )
         else:
             raise e
-        client.wait_for_operation(resp["name"], calls="projects.locations.operations")
+        # oerations not supported by v1
+        if client.version == "v2":
+            client.wait_for_operation(resp["name"], calls="projects.locations.operations")
 
 
 def get_cloudrun_url(client, name):
@@ -170,7 +199,12 @@ def get_cloudrun_url(client, name):
             parent_schema="projects/{project_id}/locations/{location_id}/services/"
             + name,
         )
-        return resp["status"]["url"]
+        # Handle both cases: cloudrun v1 and v2
+        try:
+            target = resp["status"]["url"]
+        except KeyError:
+            target = resp["uri"]
+        return target
     except HttpError as e:
         if e.resp.status == 404:
             log.info(f"cloudrun {name} not found")
@@ -180,6 +214,8 @@ def get_cloudrun_url(client, name):
 
 def get_cloudfunction_url(client, name):
     """Get the cloudrun url"""
+    if client.version == "v1":
+        return f"https://{get_default_location()}-{get_default_project()}.cloudfunctions.net/{name}"
     try:
         resp = client.execute(
             "get",
@@ -187,8 +223,11 @@ def get_cloudfunction_url(client, name):
             parent_schema="projects/{project_id}/locations/{location_id}/functions/"
             + name,
         )
-        target = resp["httpsTrigger"]["url"]
-
+        # handle both cases: first for gcf v1 and second for v2
+        try:
+            target = resp["httpsTrigger"]["url"]
+        except KeyError:
+            target = resp["serviceConfig"]["uri"]
         return target
     except HttpError as e:
         if e.resp.status == 404:
@@ -292,3 +331,17 @@ def destroy_eventarc_trigger(client, trigger_name, region):
             log.info(f"eventarc trigger  {trigger_name} already destroyed")
         else:
             raise e
+
+
+def get_function_runtime(client, config=None):
+    """
+    Returns the proper runtime to be used in cloudfunctions
+    """
+    runtime = config.runtime or get_python_runtime()
+    required_runtime = "python37" if client.version == "v1" else "python38"
+    if int(runtime.split("python")[-1]) < int(required_runtime.split("python")[-1]):
+        raise ValueError(
+            f"Your current python runtime is {runtime}. Your backend requires a minimum of {required_runtime}"
+            f". Either upgrade python on your machine or set the 'runtime' field in config.json."
+        )
+    return runtime
